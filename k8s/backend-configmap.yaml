@@ -1,0 +1,21 @@
+# Non-sensitive backend configuration.
+# Anything here is safe to view in `kubectl describe configmap` and safe to
+# commit to git — no credentials belong in this file (see
+# backend-secret-example.yaml for how credentials are handled instead).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: devops-platform
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/part-of: devops-platform
+data:
+  PORT: "8080"
+  NODE_ENV: "production"
+  LOG_LEVEL: "info"
+  # Hostname only — not a credential. Resolves via the private Route53 /
+  # VPC DNS zone associated with the RDS instance (see docs/PRIVATE_DB_CONNECTIVITY.md).
+  DB_HOST: "devops-platform-db.internal.example.local"
+  DB_PORT: "5432"
+  DB_NAME: "appdb"

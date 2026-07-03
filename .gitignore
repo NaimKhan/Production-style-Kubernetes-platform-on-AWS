@@ -1,0 +1,28 @@
+# Dependencies
+**/node_modules/
+**/coverage/
+
+# Env / secrets
+.env
+.env.*
+**/.env
+**/.env.*
+*.pem
+*.key
+
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.auto.tfvars
+*.auto.tfvars.json
+# NOTE: terraform/environments/*.tfvars ARE committed on purpose - they
+# contain only non-secret sizing/region config. Never add a real secret
+# value to a tracked .tfvars file; use TF_VAR_* env vars from CI secrets
+# instead (see terraform/README.md "secrets outside Terraform").
+crash.log
+crash.*.log
+
+# OS / editor
+.DS_Store
+*.log

@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: devops-platform
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/part-of: devops-platform
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0   # zero-downtime: never drop below desired replica count
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: backend
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: backend
+        app.kubernetes.io/part-of: devops-platform
+    spec:
+      # Backend is never reachable from outside the cluster: no Ingress rule
+      # points at backend-service (see ingress.yaml), and backend-service.yaml
+      # is ClusterIP only.
+      containers:
+        - name: backend
+          # NOTE: this placeholder tag is replaced by CI at deploy time via
+          # `kustomize edit set image` (see .github/workflows/ci-cd.yml and
+          # k8s/overlays/*/kustomization.yaml). It is intentionally NOT
+          # "latest" — every deploy pins an immutable, traceable tag.
+          image: "<ECR_REGISTRY>/devops-platform-backend:v0.1.0"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: backend-config
+            - secretRef:
+                name: backend-db-secret
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+      securityContext:
+        fsGroup: 1000

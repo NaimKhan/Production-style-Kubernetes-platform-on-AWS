@@ -1,0 +1,22 @@
+# Deliberately ClusterIP (the default) — never LoadBalancer or NodePort.
+# This is what makes the backend "internal only": nothing outside the
+# cluster's pod network can reach it directly. Only the frontend (and
+# anything else inside the cluster) can resolve/call it at
+# backend-service.devops-platform.svc.cluster.local:8080
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: devops-platform
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/part-of: devops-platform
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: backend
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

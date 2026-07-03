@@ -1,0 +1,22 @@
+{
+  "name": "devops-assessment-backend",
+  "version": "1.0.0",
+  "description": "Backend API for DevOps Kubernetes platform assessment",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node src/server.js",
+    "test": "jest --ci --coverage"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "supertest": "^7.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

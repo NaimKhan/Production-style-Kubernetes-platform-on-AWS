@@ -1,0 +1,260 @@
+name: CI/CD Pipeline
+
+# Runs on every push/PR to main, plus manual trigger for on-demand runs
+# (e.g. re-deploying without a code change).
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+# Least-privilege permissions for the default GITHUB_TOKEN.
+# - id-token: write is required for OIDC auth to AWS (no long-lived keys).
+# - contents: write is required to create tags/releases.
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-1' }}
+  ECR_REPO_BACKEND: ${{ vars.ECR_REPO_BACKEND || 'devops-platform-backend' }}
+  ECR_REPO_FRONTEND: ${{ vars.ECR_REPO_FRONTEND || 'devops-platform-frontend' }}
+
+jobs:
+  # ---------------------------------------------------------------------
+  # TEST STAGE — runs for every push and PR. Nothing gets built or pushed
+  # until both test jobs pass.
+  # ---------------------------------------------------------------------
+  test-backend:
+    name: Test backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  test-frontend:
+    name: Test frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+  # ---------------------------------------------------------------------
+  # Detect whether AWS credentials are actually configured in this repo.
+  # This lets the pipeline run end-to-end (with a clearly-labelled mock)
+  # on a fresh fork/clone before any cloud infra exists, and switch to
+  # real pushes/deploys automatically once secrets are added — no code
+  # change required.
+  # ---------------------------------------------------------------------
+  check-aws-config:
+    name: Check AWS configuration
+    runs-on: ubuntu-latest
+    needs: [test-backend, test-frontend]
+    outputs:
+      aws_configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        run: |
+          if [ -n "${{ secrets.AWS_ROLE_ARN }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------
+  # BUILD, TAG, PUSH — one job per service via matrix, so both images are
+  # built identically and in parallel.
+  # ---------------------------------------------------------------------
+  build-and-push:
+    name: Build & push (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    needs: [check-aws-config]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            context: backend
+          - service: frontend
+            context: frontend
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set image tags
+        id: tags
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          echo "sha_tag=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=v0.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build ${{ matrix.service }} image
+        run: |
+          docker build \
+            -t ${{ matrix.service }}:${{ steps.tags.outputs.sha_tag }} \
+            -t ${{ matrix.service }}:latest \
+            ./${{ matrix.context }}
+
+      # ---- Real push path: only runs if AWS_ROLE_ARN secret is set ----
+      - name: Configure AWS credentials (OIDC)
+        if: needs.check-aws-config.outputs.aws_configured == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        if: needs.check-aws-config.outputs.aws_configured == 'true'
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Tag & push to ECR
+        if: needs.check-aws-config.outputs.aws_configured == 'true'
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          REPO: ${{ matrix.service == 'backend' && env.ECR_REPO_BACKEND || env.ECR_REPO_FRONTEND }}
+          SHA_TAG: ${{ steps.tags.outputs.sha_tag }}
+          RELEASE_TAG: ${{ steps.tags.outputs.release_tag }}
+        run: |
+          for TAG in "$SHA_TAG" "latest" "$RELEASE_TAG"; do
+            docker tag ${{ matrix.service }}:${{ steps.tags.outputs.sha_tag }} "$REGISTRY/$REPO:$TAG"
+            docker push "$REGISTRY/$REPO:$TAG"
+          done
+
+      # ---- Mock push path: runs when no AWS secret is configured yet ----
+      - name: Mock push to ECR (no AWS credentials configured)
+        if: needs.check-aws-config.outputs.aws_configured != 'true'
+        run: |
+          echo "::warning::AWS_ROLE_ARN secret not set — mocking the ECR push."
+          echo "Would push the following tags to ECR repo '${{ matrix.service == 'backend' && env.ECR_REPO_BACKEND || env.ECR_REPO_FRONTEND }}':"
+          echo "  - ${{ steps.tags.outputs.sha_tag }}  (immutable, traceable to this commit)"
+          echo "  - latest                              (moving pointer to newest build)"
+          echo "  - ${{ steps.tags.outputs.release_tag }} (release version)"
+
+  # ---------------------------------------------------------------------
+  # RELEASE — only on pushes to main (not PRs), and only after both
+  # images built successfully. Creates a git tag + GitHub Release.
+  # ---------------------------------------------------------------------
+  release:
+    name: Create release
+    runs-on: ubuntu-latest
+    needs: [build-and-push]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set release tag
+        id: tags
+        run: echo "release_tag=v0.1.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tags.outputs.release_tag }}
+          name: Release ${{ steps.tags.outputs.release_tag }}
+          generate_release_notes: true
+          body: |
+            Automated release from commit ${{ github.sha }}.
+
+            Images built and tagged in this run:
+            - backend:${{ steps.tags.outputs.release_tag }}
+            - frontend:${{ steps.tags.outputs.release_tag }}
+
+  # ---------------------------------------------------------------------
+  # DEPLOY — real deploy if a target EKS cluster/kubeconfig is configured,
+  # otherwise a clearly-labelled mock. Becomes "real" automatically once
+  # Task 3/4 (K8s manifests + Terraform-provisioned EKS) land — just add
+  # the EKS_CLUSTER_NAME secret, no workflow change needed.
+  # ---------------------------------------------------------------------
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: [release]
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ secrets.AWS_ROLE_ARN != '' && secrets.EKS_CLUSTER_NAME != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Real deploy to EKS
+        if: ${{ secrets.AWS_ROLE_ARN != '' && secrets.EKS_CLUSTER_NAME != '' }}
+        env:
+          RELEASE_TAG: v0.1.${{ github.run_number }}
+        run: |
+          aws eks update-kubeconfig --name "${{ secrets.EKS_CLUSTER_NAME }}" --region "${{ env.AWS_REGION }}"
+
+          # Substitute the placeholder image tag with the real one just
+          # built and pushed, without needing a templating tool - the
+          # manifests use a clearly-marked placeholder specifically for this.
+          sed -i "s|<ECR_REGISTRY>/devops-platform-backend:v0.1.0|$(aws ecr describe-repositories --repository-names ${{ env.ECR_REPO_BACKEND }} --query 'repositories[0].repositoryUri' --output text):${RELEASE_TAG}|" k8s/backend-deployment.yaml
+          sed -i "s|<ECR_REGISTRY>/devops-platform-frontend:v0.1.0|$(aws ecr describe-repositories --repository-names ${{ env.ECR_REPO_FRONTEND }} --query 'repositories[0].repositoryUri' --output text):${RELEASE_TAG}|" k8s/frontend-deployment.yaml
+
+          kubectl apply -f k8s/namespace.yaml
+          kubectl apply -f k8s/backend-configmap.yaml
+          kubectl apply -f k8s/backend-deployment.yaml
+          kubectl apply -f k8s/backend-service.yaml
+          kubectl apply -f k8s/frontend-deployment.yaml
+          kubectl apply -f k8s/frontend-service.yaml
+          kubectl apply -f k8s/ingress.yaml
+          # backend-secret-example.yaml is intentionally NOT applied here -
+          # the real Secret is created out-of-band / via Secrets Store CSI
+          # driver, never from the example file. See k8s/backend-secret-example.yaml.
+
+          kubectl rollout status deployment/backend  -n devops-platform --timeout=120s
+          kubectl rollout status deployment/frontend -n devops-platform --timeout=120s
+
+      - name: Mock deploy (no EKS cluster configured yet)
+        if: ${{ secrets.AWS_ROLE_ARN == '' || secrets.EKS_CLUSTER_NAME == '' }}
+        run: |
+          echo "::warning::EKS_CLUSTER_NAME secret not set — mocking the Kubernetes deploy."
+          echo "Would run:"
+          echo "  aws eks update-kubeconfig --name <cluster> --region ${{ env.AWS_REGION }}"
+          echo "  kubectl apply -f k8s/namespace.yaml"
+          echo "  kubectl apply -f k8s/backend-configmap.yaml"
+          echo "  kubectl apply -f k8s/backend-deployment.yaml   (image tag substituted to v0.1.${{ github.run_number }})"
+          echo "  kubectl apply -f k8s/backend-service.yaml"
+          echo "  kubectl apply -f k8s/frontend-deployment.yaml  (image tag substituted to v0.1.${{ github.run_number }})"
+          echo "  kubectl apply -f k8s/frontend-service.yaml"
+          echo "  kubectl apply -f k8s/ingress.yaml"
+          echo "  kubectl rollout status deployment/backend  -n devops-platform"
+          echo "  kubectl rollout status deployment/frontend -n devops-platform"

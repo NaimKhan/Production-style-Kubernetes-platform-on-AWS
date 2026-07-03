@@ -1,0 +1,22 @@
+# ClusterIP, same as the backend — the frontend is NOT exposed directly as a
+# LoadBalancer/NodePort Service. External access is deliberately routed
+# through a single choke point: ingress.yaml. That's where TLS termination,
+# WAF association, and access logging live, instead of being scattered
+# across every Service that happens to need external traffic.
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-service
+  namespace: devops-platform
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/part-of: devops-platform
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: frontend
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP

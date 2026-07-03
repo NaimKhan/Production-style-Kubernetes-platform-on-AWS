@@ -1,0 +1,10 @@
+node_modules
+tests
+package.json
+package-lock.json
+.htmlhintrc
+Dockerfile
+.dockerignore
+.git
+.gitignore
+*.md

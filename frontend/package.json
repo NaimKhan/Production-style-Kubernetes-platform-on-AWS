@@ -1,0 +1,12 @@
+{
+  "name": "devops-assessment-frontend",
+  "version": "1.0.0",
+  "description": "Static frontend (served by nginx) for DevOps Kubernetes platform assessment",
+  "private": true,
+  "scripts": {
+    "test": "node tests/sanity.test.js && htmlhint public/index.html"
+  },
+  "devDependencies": {
+    "htmlhint": "^1.1.4"
+  }
+}

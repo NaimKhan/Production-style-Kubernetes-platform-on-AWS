@@ -1,0 +1,42 @@
+# Requires the AWS Load Balancer Controller to be installed in the cluster
+# (deployed once via Terraform/Helm as part of cluster bootstrap — see
+# terraform/README.md). It watches Ingress objects with this annotation and
+# provisions/manages an actual ALB in AWS.
+#
+# Note there is deliberately NO rule anywhere in this file that points at
+# backend-service. That is what makes "backend is internal only" true at
+# the network level, not just by convention — the backend simply has no
+# path into it from outside the cluster's pod network.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend-ingress
+  namespace: devops-platform
+  labels:
+    app.kubernetes.io/name: frontend
+    app.kubernetes.io/part-of: devops-platform
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    # ACM certificate ARN — populated by CI/CD from a repo variable, or
+    # patched in per-environment. Left as a placeholder here on purpose.
+    alb.ingress.kubernetes.io/certificate-arn: "<ACM_CERTIFICATE_ARN>"
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+    alb.ingress.kubernetes.io/healthcheck-interval-seconds: "15"
+    # Associates the ALB with a WAFv2 WebACL created in Terraform
+    # (see docs/future-improvements.md — "WAF" for the rollout plan).
+    # alb.ingress.kubernetes.io/wafv2-acl-arn: "<WAFV2_ACL_ARN>"
+spec:
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend-service
+                port:
+                  number: 80
