@@ -72,7 +72,7 @@ the security boundaries sit.*
 | Upgrade/state/scaling operations | `terraform/README.md` → "Terraform Maintenance & Operations" |
 | Incident response playbook | `docs/troubleshooting.md` |
 | What's intentionally not done yet, and why | `docs/future-improvements.md` |
-| Architecture diagrams | `docs/architecture-simple.mermaid`, `docs/architecture-flow.mermaid` |
+| Architecture diagrams | `docs/architecture-flow.png` |
 
 ## Repository structure
 
