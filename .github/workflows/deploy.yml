@@ -209,15 +209,28 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # `secrets` cannot be referenced directly inside an `if:` conditional
+      # in GitHub Actions - it's only readable inside a `run:` step. So we
+      # check it here once and store the result as a step output, then
+      # every later `if:` reads that output instead of `secrets.*` directly.
+      - name: Check deploy configuration
+        id: deploy_check
+        run: |
+          if [ -n "${{ secrets.AWS_ROLE_ARN }}" ] && [ -n "${{ secrets.EKS_CLUSTER_NAME }}" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Configure AWS credentials (OIDC)
-        if: ${{ secrets.AWS_ROLE_ARN != '' && secrets.EKS_CLUSTER_NAME != '' }}
+        if: steps.deploy_check.outputs.ready == 'true'
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Real deploy to EKS
-        if: ${{ secrets.AWS_ROLE_ARN != '' && secrets.EKS_CLUSTER_NAME != '' }}
+        if: steps.deploy_check.outputs.ready == 'true'
         env:
           RELEASE_TAG: v0.1.${{ github.run_number }}
         run: |
@@ -244,7 +257,7 @@ jobs:
           kubectl rollout status deployment/frontend -n devops-platform --timeout=120s
 
       - name: Mock deploy (no EKS cluster configured yet)
-        if: ${{ secrets.AWS_ROLE_ARN == '' || secrets.EKS_CLUSTER_NAME == '' }}
+        if: steps.deploy_check.outputs.ready != 'true'
         run: |
           echo "::warning::EKS_CLUSTER_NAME secret not set — mocking the Kubernetes deploy."
           echo "Would run:"
