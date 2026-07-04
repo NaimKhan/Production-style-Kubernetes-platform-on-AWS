@@ -6,33 +6,77 @@ via custom Terraform modules, with a private RDS database.
 
 ## Architecture
 
+Two diagrams are in [`docs/`](docs/) — render either one directly on GitHub,
+or paste into [mermaid.live](https://mermaid.live):
+
+- [`docs/architecture-simple.mermaid`](docs/architecture-simple.mermaid) —
+  the big picture in one glance (developer → pipeline → EKS → database).
+- [`docs/architecture-flow.mermaid`](docs/architecture-flow.mermaid) — the
+  same system with two numbered flows: how a deploy travels from `git push`
+  to a running pod, and how a real user request travels from the browser to
+  the database and back, including where the security boundaries sit.
+
 ```
-                    Internet
-                       │
-                  ┌────▼────┐
-                  │  Ingress │  (ALB, public)
-                  │  (frontend only)
-                  └────┬────┘
-                       │
-                ┌──────▼──────┐        /api/*        ┌─────────────┐
-                │  frontend    │ ───────────────────▶ │  backend     │
-                │  (nginx, 2x) │   proxy_pass          │  (node, 2x)  │
-                └──────────────┘                       └──────┬──────┘
-                                                                │ private
-                                                          ┌─────▼─────┐
-                                                          │  RDS (DB)  │
-                                                          │  private   │
-                                                          └────────────┘
+🌍 Users ──▶ ALB ──▶ Frontend (public) ──▶ Backend (private) ──▶ RDS (private)
+                                                                     ▲
+👨‍💻 Dev ──▶ GitHub ──▶ CI/CD ──▶ ECR ──▶ EKS ─────────────────────────┘
 ```
 
-- **frontend** never calls the backend using an internal hostname directly
-  from the browser — nginx reverse-proxies `/api/*` to the backend. Avoids
-  CORS, and means the frontend doesn't change between environments.
-- **backend** is internal-only: `ClusterIP` Service, no Ingress rule points
-  at it. Only reachable from inside the cluster.
-- **database** is in private subnets only, security group locked to the EKS
-  node security group, never publicly accessible. Full design rationale in
-  [`terraform/README.md`](terraform/README.md).
+---
+
+## 🛠️ Summary of completed work
+
+### Docker & local Compose setup
+- Express backend on port 8080 with `/` and `/health` endpoints; Nginx frontend.
+- Multi-stage Docker builds, non-root runtime users, minimal Alpine-based images.
+- Single-command local orchestration via `docker-compose.yml` (`docker compose up -d`).
+
+### CI/CD pipeline
+- GitHub Actions workflow triggered on push to `main`.
+- Runs tests, builds and tags both images with the commit SHA (never `latest`),
+  authenticates to AWS via OIDC (no static keys in GitHub Secrets), pushes to
+  ECR, cuts a GitHub Release, and rolls out the new image tag to EKS.
+- ECR push and the EKS deploy step both fall back to a clearly-labeled mock
+  when AWS infrastructure/secrets aren't configured yet, so the pipeline runs
+  end-to-end from day one.
+
+### Kubernetes orchestration
+- Two replicas minimum per service, rolling updates with zero unavailability.
+- CPU/memory `requests` and `limits` set on every container.
+- Liveness and readiness HTTP probes for self-healing and safe traffic cutover.
+- ALB Ingress exposes the frontend only; the backend Service is `ClusterIP`
+  with no Ingress rule pointing at it — unreachable from outside the cluster.
+
+### Private database
+- RDS lives only in private subnets, `publicly_accessible = false`.
+- Security group allows the database port from the EKS node security group
+  only — nothing else, no `0.0.0.0/0` rule anywhere.
+- Master password is AWS-managed (`manage_master_user_password = true`) and
+  stored in Secrets Manager — Terraform and CI never see the plaintext.
+
+### Terraform (Infrastructure as Code)
+- 100% custom modules (`vpc`, `ecr`, `eks`, `rds`, `monitoring`) — no
+  third-party/registry modules.
+- Remote state in S3 with DynamoDB locking, so two applies can never run
+  concurrently and corrupt state.
+- Separate `.tfvars`/backend config per environment (`dev`, `prod`).
+
+---
+
+## Where everything lives
+
+| Looking for... | Go to |
+|---|---|
+| The actual app code | `frontend/`, `backend/` |
+| How to run it locally | `docker-compose.yml`, "Running locally" below |
+| The CI/CD pipeline | `.github/workflows/deploy.yml` |
+| Kubernetes manifests | `k8s/` |
+| Cloud infrastructure code | `terraform/` — start with `terraform/README.md` |
+| How the database stays private | `terraform/README.md` → "Private Database Connectivity" |
+| Upgrade/state/scaling operations | `terraform/README.md` → "Terraform Maintenance & Operations" |
+| Incident response playbook | `docs/troubleshooting.md` |
+| What's intentionally not done yet, and why | `docs/future-improvements.md` |
+| Architecture diagrams | `docs/architecture-simple.mermaid`, `docs/architecture-flow.mermaid` |
 
 ## Repository structure
 
@@ -61,10 +105,12 @@ via custom Terraform modules, with a private RDS database.
 │   ├── provider.tf  main.tf  variables.tf  outputs.tf
 │   ├── environments/                  # dev / prod tfvars + backend config
 │   ├── modules/vpc  ecr  eks  rds  monitoring/
-│   └── README.md                        # Task 4 + Task 5 full explanations
+│   └── README.md                        # private DB + Terraform ops explained
 └── docs/
-    ├── troubleshooting.md                # 15 incident-response scenarios
-    └── future-improvements.md              # 16 improvements, each with why/how/risk
+    ├── architecture-simple.mermaid       # high-level diagram
+    ├── architecture-flow.mermaid           # detailed, numbered request/deploy flow
+    ├── troubleshooting.md                    # 15 incident-response scenarios
+    └── future-improvements.md                  # 16 improvements, each with why/how/risk
 ```
 
 ## Running locally
@@ -83,23 +129,7 @@ cd backend && npm ci && npm test
 cd frontend && npm ci && npm test
 ```
 
-## CI/CD pipeline
-
-See [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) and the
-"CI/CD pipeline" section this README previously had, now summarized here:
-
-`test-backend` + `test-frontend` → `check-aws-config` → `build-and-push`
-(matrix: frontend, backend — tags each image with git-sha, `latest`, and a
-release version) → `release` (GitHub Release + tag) → `deploy` (to EKS).
-
-**The pipeline runs end-to-end today**, before any AWS infrastructure
-exists — ECR push and the K8s deploy step both detect whether
-`AWS_ROLE_ARN`/`EKS_CLUSTER_NAME` secrets are configured, and cleanly mock
-those two steps if not (clearly labeled `::warning::` in the logs). Adding
-the secrets after `terraform apply` switches both to real, with no workflow
-edit needed.
-
-### Secrets required (once real AWS infra exists)
+## CI/CD secrets (once real AWS infra exists)
 
 Add under **Settings → Secrets and variables → Actions**:
 
@@ -110,29 +140,8 @@ Add under **Settings → Secrets and variables → Actions**:
 | `AWS_REGION` | Variable | e.g. `ap-southeast-1` |
 | `ECR_REPO_BACKEND` / `ECR_REPO_FRONTEND` | Variable | from `terraform output ecr_repository_urls` |
 
-Full reasoning for OIDC over static keys, and how this compares to Jenkins
-Credentials/Azure Key Vault/Secrets Manager, is documented inline in the
-workflow file and was covered when the pipeline was first built.
-
-## How each evaluation criterion is met
-
-| Criterion | Where |
-|---|---|
-| GitHub structure | This layout — matches the expected structure, functional folder names, no "TaskN" labels |
-| Frontend/backend separation | `frontend/`, `backend/` — separate apps, separate Dockerfiles, separate CI jobs |
-| Docker & Compose quality | multi-stage builds, non-root users, HEALTHCHECK, `docker-compose.yml` |
-| CI/CD understanding | `.github/workflows/deploy.yml` — test/build/tag/push/release/deploy staged pipeline |
-| Image tagging & ECR push | git-sha + release-version tags, never `latest` in a real deploy; real-or-mock ECR push |
-| K8s manifest quality | `k8s/` — probes, resource limits, 2 replicas, ConfigMap/Secret separation, internal-only backend |
-| Private DB connectivity | `terraform/README.md` "Task 4" section + `modules/rds` |
-| Terraform module structure | `terraform/modules/` — 5 custom modules, no registry modules |
-| EKS provisioning knowledge | `modules/eks` — IAM roles, OIDC/IRSA, managed node group, control-plane logging |
-| Terraform maintenance | `terraform/README.md` "Task 5" section — upgrades, state, node resize, env separation |
-| Security & secrets | OIDC CI auth, `manage_master_user_password`, `k8s/backend-secret-example.yaml` template, `.gitignore` |
-| Troubleshooting approach | `docs/troubleshooting.md` — 15 scenarios |
-| Documentation quality | this file + `terraform/README.md` + inline comments throughout |
-| Future improvements | `docs/future-improvements.md` — 16 areas |
-| Production-readiness mindset | rolling updates with zero unavailability, deletion protection, multi-AZ, least-privilege IAM throughout |
+Until these exist, `deploy.yml` runs the ECR push and EKS deploy steps as a
+clearly-labeled mock — nothing breaks, nothing silently no-ops.
 
 ## Pushing this to GitHub
 
@@ -147,5 +156,5 @@ git push -u origin main
 ```
 
 Then, once real AWS infra is provisioned (`cd terraform && terraform apply`),
-add the 4 secrets/variables listed above under repo Settings, and the next
-push to `main` will do a real ECR push + EKS deploy automatically.
+add the 4 secrets/variables above under repo Settings, and the next push to
+`main` does a real ECR push + EKS deploy automatically.
