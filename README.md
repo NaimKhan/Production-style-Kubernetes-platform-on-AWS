@@ -6,15 +6,11 @@ via custom Terraform modules, with a private RDS database.
 
 ## Architecture
 
-Two diagrams are in [`docs/`](docs/) — render either one directly on GitHub,
-or paste into [mermaid.live](https://mermaid.live):
+![Full system architecture — deploy flow and user request flow](docs/architecture-flow.png)
 
-- [`docs/architecture-simple.mermaid`](docs/architecture-simple.mermaid) —
-  the big picture in one glance (developer → pipeline → EKS → database).
-- [`docs/architecture-flow.mermaid`](docs/architecture-flow.mermaid) — the
-  same system with two numbered flows: how a deploy travels from `git push`
-  to a running pod, and how a real user request travels from the browser to
-  the database and back, including where the security boundaries sit.
+*How a deploy travels from `git push` to a running pod, and how a real user
+request travels from the browser to the database and back — including where
+the security boundaries sit.*
 
 ```
 🌍 Users ──▶ ALB ──▶ Frontend (public) ──▶ Backend (private) ──▶ RDS (private)
