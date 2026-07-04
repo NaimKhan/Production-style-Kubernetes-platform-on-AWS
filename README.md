@@ -78,35 +78,34 @@ the security boundaries sit.*
 
 ```
 .
-├── backend/                  # Express API - /, /health, /api/info (port 8080)
+├── backend/                                # Express API - /, /health, /api/info (port 8080)
 │   ├── src/app.js  server.js
-│   ├── tests/                # Jest + supertest
-│   └── Dockerfile             # multi-stage, non-root, HEALTHCHECK
-├── frontend/                  # static page served by nginx, proxies /api/*
+│   ├── tests/                              # Jest + supertest
+│   └── Dockerfile                          # multi-stage, non-root, HEALTHCHECK
+├── frontend/                               # static page served by nginx, proxies /api/*
 │   ├── public/index.html
-│   ├── tests/                  # sanity checks + htmlhint
+│   ├── tests/                              # sanity checks + htmlhint
 │   └── Dockerfile
-├── docker-compose.yml           # local dev: frontend :3000, backend :8080
+├── docker-compose.yml                      # local dev: frontend :3000, backend :8080
 ├── .dockerignore / .gitignore
 ├── .github/workflows/
-│   └── deploy.yml                 # test -> build -> tag -> push -> release -> deploy
-├── k8s/                             # Kubernetes manifests
+│   └── deploy.yml                          # test -> build -> tag -> push -> release -> deploy
+├── k8s/                                    # Kubernetes manifests
 │   ├── namespace.yaml
 │   ├── backend-deployment.yaml / backend-service.yaml
 │   ├── frontend-deployment.yaml / frontend-service.yaml
 │   ├── backend-configmap.yaml
-│   ├── backend-secret-example.yaml  # template only, not a real secret
+│   ├── backend-secret-example.yaml          # template only, not a real secret
 │   └── ingress.yaml
-├── terraform/                        # AWS infra, custom modules only
+├── terraform/                               # AWS infra, custom modules only
 │   ├── provider.tf  main.tf  variables.tf  outputs.tf
-│   ├── environments/                  # dev / prod tfvars + backend config
+│   ├── environments/                        # dev / prod tfvars + backend config
 │   ├── modules/vpc  ecr  eks  rds  monitoring/
-│   └── README.md                        # private DB + Terraform ops explained
+│   └── README.md                            # private DB + Terraform ops explained
 └── docs/
-    ├── architecture-simple.mermaid       # high-level diagram
-    ├── architecture-flow.mermaid           # detailed, numbered request/deploy flow
-    ├── troubleshooting.md                    # 15 incident-response scenarios
-    └── future-improvements.md                  # 16 improvements, each with why/how/risk
+    ├── architecture-flow.png                # high-level diagram
+    ├── troubleshooting.md                   # 15 incident-response scenarios
+    └── future-improvements.md               # 16 improvements, each with why/how/risk
 ```
 
 ## Running locally
